@@ -1,43 +1,56 @@
 (ns cljlangdetect.core
   (:import [com.cybozu.labs.langdetect.Detector]
            [com.cybozu.labs.langdetect.DetectorFactory]
-           [java.io.File])
+           [com.cybozu.labs.langdetect LangDetectException]
+           [java.io.File]
+           [org.apache.commons.io.FileUtils]
+           [org.apache.commons.io.IOUtils])
   (:gen-class))
-
 
 (def sep (java.io.File/separator))
 
-;; Use the included data, to train detectors.
+(def profiles (atom false))
 
-;;TODO: Sorry, couldn't bring this to work on time, it's late.
-;;; To read them from the jar, however, first extract the directory
-;;; to somewhere and then use the wrapped method to read it.
-;;; The random temporary folder we will extract the files to
-;(def target-dir (str (System/getProperty "java.io.tmpdir")
-;                     sep "cljld" (rand-int 1000) sep))
-;(def zs (java.util.zip.ZipInputStream. (.openStream (clojure.java.io/resource ";./profiles"))))
-;;;Write all profiles to the temporary folder
-;(doseq [ze (.getNextEntry zs)]
-;  (when ze
-;    (let [name (.getName ze)
-;          jar-path (clojure.java.io/resource name)
-;          path (str target-dir sep)
-;          contents (slurp (.openStream jar-path))]
-;      (spit path contents))))
+(defn- load-profiles []
+  "The profiles are in paths given by profiles.txt. Take them and write them to a temporary directory."
+  (when (not @profiles)
+    (let [res-list (slurp (clojure.java.io/resource "profiles.txt"))
+          profiles (clojure.string/split res-list #"\n")
+          tmp (str (System/getProperty "java.io.tmpdir") sep)
+          folder (loop [it 0]
+                   (let [filename (str tmp "cljld" (rand-int 10000))
+                         f (java.io.File. filename)]
+                     (if (and (< it 1000) (.mkdir f))
+                       (str (.getAbsolutePath f) sep)
+                       (recur (inc it)))))]
 
-(com.cybozu.labs.langdetect.DetectorFactory/loadProfile (str "resources" sep
-                                                             "profiles"))
+      ;; (println "Extracting to " folder)
+      ;; (println "Profiles containing " (count profiles) " entries")
+      (doseq [prof profiles]
+        ;; (println "writing to " (str folder prof) "from " prof) 
+        (spit (str folder prof) (slurp (clojure.java.io/resource prof))))
+      ;; (println "Reading from temporary folder " folder)
+      (try
+        (com.cybozu.labs.langdetect.DetectorFactory/loadProfile folder)
+        (catch LangDetectException e
+          "Language files already loaded")
+        (finally
+          (.delete (java.io.File. folder)))))
+    (swap! profiles not)))
 
 (defn detect [s]
   "Detects the language for a given string. Might not work well with very short strings."
+  (load-profiles)
   (let [detector (com.cybozu.labs.langdetect.DetectorFactory/create)]
     (.append detector s)
     (.detect detector)))
 
 (defn get-probabilities [s]
+  (load-profiles)
   (let [detector (com.cybozu.labs.langdetect.DetectorFactory/create)]
     (.append detector s)
     (.getProbabilities detector)))
 
 (defn -main [& args]
+  (load-profiles)
   (println (detect (apply str (concat (map str args))))))
